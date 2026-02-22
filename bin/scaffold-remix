@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+"""Scaffold an Ableton Live 11 project from audio stems.
+
+Creates a valid .als file (gzip-compressed XML) with one audio track per stem,
+properly color-coded and tempo-matched.
+
+Usage:
+    scaffold-remix <stems-folder> [options]
+    scaffold-remix /path/to/stems --name "My Remix" --bpm 128
+
+Options:
+    --name NAME       Project name (default: derived from folder name)
+    --bpm BPM         Override BPM detection (auto-detects from stems if not set)
+    --output-dir DIR  Output directory (default: ~/Documents/das/remix-projects/<name>/)
+    --no-open         Don't auto-open in Ableton after creation
+"""
+import sys
+import os
+import shutil
+import gzip
+import argparse
+import glob
+import xml.etree.ElementTree as ET
+
+# Stem color mapping: name -> Ableton color index
+STEM_COLORS = {
+    "vocals": 14,   # blue
+    "drums": 0,     # red
+    "bass": 4,      # yellow
+    "other": 10,    # green
+}
+
+STEM_ORDER = ["drums", "bass", "vocals", "other"]
+
+
+def detect_bpm(audio_path):
+    """Detect BPM using librosa."""
+    try:
+        import librosa
+        import numpy as np
+        import warnings
+        warnings.filterwarnings("ignore")
+        y, sr = librosa.load(audio_path, sr=None, duration=60)  # first 60s for speed
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        bpm = float(tempo) if np.isscalar(tempo) else float(tempo[0])
+        return round(bpm, 1)
+    except Exception as e:
+        print(f"Warning: BPM detection failed: {e}", file=sys.stderr)
+        return 120.0
+
+
+def get_audio_duration(audio_path):
+    """Get audio duration in seconds using librosa."""
+    try:
+        import librosa
+        import warnings
+        warnings.filterwarnings("ignore")
+        y, sr = librosa.load(audio_path, sr=None)
+        return len(y) / sr
+    except Exception:
+        return 180.0  # fallback 3 minutes
+
+
+def find_stems(stems_dir):
+    """Find stem files in directory. Returns dict of stem_name -> file_path."""
+    stems = {}
+    for ext in ("*.mp3", "*.wav", "*.flac", "*.aif", "*.aiff", "*.m4a"):
+        for f in glob.glob(os.path.join(stems_dir, ext)):
+            basename = os.path.splitext(os.path.basename(f))[0].lower()
+            if basename in STEM_COLORS:
+                stems[basename] = f
+    return stems
+
+
+def build_file_ref(relative_path, filename):
+    """Build an Ableton FileRef XML element."""
+    file_ref = ET.Element("FileRef")
+
+    # RelativePath with path components
+    rel_path_el = ET.SubElement(file_ref, "RelativePath", Value=relative_path)
+
+    # SearchHint
+    search_hint = ET.SubElement(file_ref, "SearchHint")
+    ET.SubElement(search_hint, "PathHint")
+    ET.SubElement(search_hint, "FileSize", Value="0")
+    ET.SubElement(search_hint, "Crc", Value="0")
+    ET.SubElement(search_hint, "MaxCrcSize", Value="0")
+    ET.SubElement(search_hint, "HasExtendedInfo", Value="true")
+
+    ET.SubElement(file_ref, "HasRelativePath", Value="true")
+    ET.SubElement(file_ref, "Type", Value="1")
+
+    return file_ref
+
+
+def build_audio_clip(clip_id, stem_name, filename, relative_path, duration_sec, bpm):
+    """Build an AudioClip XML element."""
+    clip = ET.Element("AudioClip", Id=str(clip_id))
+    ET.SubElement(clip, "LomId", Value="0")
+    ET.SubElement(clip, "LomIdView", Value="0")
+    ET.SubElement(clip, "CurrentStart", Value="0")
+    ET.SubElement(clip, "CurrentEnd", Value=str(duration_sec))
+
+    loop = ET.SubElement(clip, "Loop")
+    ET.SubElement(loop, "LoopStart", Value="0")
+    ET.SubElement(loop, "LoopEnd", Value=str(duration_sec))
+    ET.SubElement(loop, "StartRelative", Value="0")
+    ET.SubElement(loop, "LoopOn", Value="false")
+    ET.SubElement(loop, "OutMarker", Value=str(duration_sec))
+    ET.SubElement(loop, "HiddenLoopStart", Value="0")
+    ET.SubElement(loop, "HiddenLoopEnd", Value=str(duration_sec))
+
+    ET.SubElement(clip, "Name", Value=stem_name.capitalize())
+    ET.SubElement(clip, "Annotation", Value="")
+    ET.SubElement(clip, "ColorIndex", Value=str(STEM_COLORS.get(stem_name, 0)))
+    ET.SubElement(clip, "Disabled", Value="false")
+    ET.SubElement(clip, "IsWarped", Value="true")
+
+    # Warp mode
+    ET.SubElement(clip, "WarpMode", Value="0")  # Beats mode
+    ET.SubElement(clip, "GranularityTones", Value="30")
+    ET.SubElement(clip, "GranularityTexture", Value="65")
+    ET.SubElement(clip, "FluctuationTexture", Value="25")
+    ET.SubElement(clip, "ComplexProFormants", Value="100")
+    ET.SubElement(clip, "TransientResolution", Value="6")
+    ET.SubElement(clip, "TransientLoopMode", Value="2")
+
+    # SampleRef
+    sample_ref = ET.SubElement(clip, "SampleRef")
+    file_ref = build_file_ref(relative_path, filename)
+    sample_ref.append(file_ref)
+    ET.SubElement(sample_ref, "DefaultDuration", Value=str(int(duration_sec * 44100)))
+    ET.SubElement(sample_ref, "DefaultSampleRate", Value="44100")
+
+    return clip
+
+
+def build_audio_track(track_id, stem_name, filename, relative_path, duration_sec, bpm):
+    """Build an AudioTrack XML element."""
+    color = STEM_COLORS.get(stem_name, 0)
+    track = ET.Element("AudioTrack", Id=str(track_id))
+
+    ET.SubElement(track, "LomId", Value="0")
+    ET.SubElement(track, "LomIdView", Value="0")
+    ET.SubElement(track, "IsContentSelectedInDocument", Value="false")
+    ET.SubElement(track, "PreferredContentViewMode", Value="0")
+
+    # TrackDelay
+    track_delay = ET.SubElement(track, "TrackDelay")
+    ET.SubElement(track_delay, "Value", Value="0")
+    ET.SubElement(track_delay, "IsValueSampleBased", Value="false")
+
+    ET.SubElement(track, "Name")
+    name_el = track.find("Name")
+    effective = ET.SubElement(name_el, "EffectiveName", Value=stem_name.capitalize())
+    user_name = ET.SubElement(name_el, "UserName", Value=stem_name.capitalize())
+    ET.SubElement(name_el, "Annotation", Value="")
+    ET.SubElement(name_el, "MemorizedFirstClipName", Value=stem_name.capitalize())
+
+    ET.SubElement(track, "Color", Value=str(color))
+
+    # DeviceChain
+    device_chain = ET.SubElement(track, "DeviceChain")
+
+    # AutomationLanes
+    auto_lanes = ET.SubElement(device_chain, "AutomationLanes")
+    ET.SubElement(auto_lanes, "AutomationLanes")
+    ET.SubElement(auto_lanes, "AreAdditionalAutomationLanesFolded", Value="true")
+
+    # MainSequencer with clip in ArrangerAutomation
+    main_seq = ET.SubElement(device_chain, "MainSequencer")
+
+    # ClipSlotList (session view - empty)
+    clip_slot_list = ET.SubElement(main_seq, "ClipSlotList")
+
+    # ArrangerAutomation (arrangement view - our clips go here)
+    arranger = ET.SubElement(main_seq, "ArrangerAutomation")
+    events = ET.SubElement(arranger, "Events")
+
+    clip = build_audio_clip(
+        clip_id=track_id * 100,
+        stem_name=stem_name,
+        filename=filename,
+        relative_path=relative_path,
+        duration_sec=duration_sec,
+        bpm=bpm
+    )
+    events.append(clip)
+
+    ET.SubElement(main_seq, "IsRecording", Value="false")
+
+    # Mixer
+    mixer = ET.SubElement(device_chain, "Mixer")
+    # Volume
+    volume = ET.SubElement(mixer, "Volume")
+    manual = ET.SubElement(volume, "Manual", Value="0.794328")  # ~-2dB
+    ET.SubElement(volume, "AutomationTarget", Id=str(track_id * 10 + 1))
+    # Pan
+    pan = ET.SubElement(mixer, "Pan")
+    ET.SubElement(pan, "Manual", Value="0")
+    ET.SubElement(pan, "AutomationTarget", Id=str(track_id * 10 + 2))
+    # SendsListPreFader
+    ET.SubElement(mixer, "SendsListPreFader")
+    # SendsListPostFader
+    ET.SubElement(mixer, "SendsListPostFader")
+    # Speaker (on/off)
+    speaker = ET.SubElement(mixer, "Speaker")
+    ET.SubElement(speaker, "Manual", Value="true")
+    ET.SubElement(speaker, "AutomationTarget", Id=str(track_id * 10 + 3))
+    # SoloSink
+    ET.SubElement(mixer, "SoloSink", Value="false")
+    # Tempo (per-track, links to master)
+    tempo_el = ET.SubElement(mixer, "Tempo")
+    ET.SubElement(tempo_el, "Manual", Value=str(bpm))
+
+    # DeviceChain > DeviceChain (yes, nested)
+    inner_chain = ET.SubElement(device_chain, "DeviceChain")
+    devices = ET.SubElement(inner_chain, "Devices")
+
+    return track
+
+
+def build_master_track(bpm):
+    """Build the MasterTrack XML element."""
+    master = ET.Element("MasterTrack")
+
+    ET.SubElement(master, "LomId", Value="0")
+    ET.SubElement(master, "LomIdView", Value="0")
+    ET.SubElement(master, "IsContentSelectedInDocument", Value="false")
+    ET.SubElement(master, "PreferredContentViewMode", Value="0")
+
+    name = ET.SubElement(master, "Name")
+    ET.SubElement(name, "EffectiveName", Value="Master")
+    ET.SubElement(name, "UserName", Value="")
+    ET.SubElement(name, "Annotation", Value="")
+    ET.SubElement(name, "MemorizedFirstClipName", Value="")
+
+    ET.SubElement(master, "Color", Value="-1")
+
+    device_chain = ET.SubElement(master, "DeviceChain")
+
+    auto_lanes = ET.SubElement(device_chain, "AutomationLanes")
+    ET.SubElement(auto_lanes, "AutomationLanes")
+
+    main_seq = ET.SubElement(device_chain, "MainSequencer")
+    ET.SubElement(main_seq, "ClipSlotList")
+
+    mixer = ET.SubElement(device_chain, "Mixer")
+
+    # Tempo
+    tempo_el = ET.SubElement(mixer, "Tempo")
+    ET.SubElement(tempo_el, "Manual", Value=str(bpm))
+    ET.SubElement(tempo_el, "AutomationTarget", Id="1")
+
+    # TimeSignature
+    time_sig = ET.SubElement(mixer, "TimeSignature")
+    ts_events = ET.SubElement(time_sig, "TimeSignatures")
+    ts_event = ET.SubElement(ts_events, "RemoteableTimeSignature", Id="0")
+    ET.SubElement(ts_event, "Numerator", Value="4")
+    ET.SubElement(ts_event, "Denominator", Value="4")
+    ET.SubElement(ts_event, "Time", Value="0")
+
+    # Volume
+    volume = ET.SubElement(mixer, "Volume")
+    ET.SubElement(volume, "Manual", Value="1")
+    ET.SubElement(volume, "AutomationTarget", Id="2")
+
+    # Pan
+    pan = ET.SubElement(mixer, "Pan")
+    ET.SubElement(pan, "Manual", Value="0")
+    ET.SubElement(pan, "AutomationTarget", Id="3")
+
+    ET.SubElement(mixer, "SoloSink", Value="false")
+
+    inner_chain = ET.SubElement(device_chain, "DeviceChain")
+    ET.SubElement(inner_chain, "Devices")
+
+    return master
+
+
+def build_als_xml(project_name, stems_info, bpm, sample_rate=44100):
+    """Build the complete Ableton Live Set XML document.
+
+    stems_info: list of dicts with keys: name, filename, relative_path, duration_sec
+    """
+    # Root element
+    root = ET.Element("Ableton", {
+        "MajorVersion": "5",
+        "MinorVersion": "11.0.0_11.0.0",
+        "SchemaChangeCount": "3",
+        "Creator": "DAS Remix Toolkit",
+        "Revision": "",
+    })
+
+    live_set = ET.SubElement(root, "LiveSet")
+
+    # NextPointeeId
+    ET.SubElement(live_set, "NextPointeeId", Value="20000")
+
+    # OverrideRootNote
+    ET.SubElement(live_set, "OverrideRootNote", Value="-1")
+
+    # Master track
+    master = build_master_track(bpm)
+    live_set.append(master)
+
+    # Tracks
+    tracks_el = ET.SubElement(live_set, "Tracks")
+
+    for i, stem in enumerate(stems_info):
+        track = build_audio_track(
+            track_id=i + 2,  # start at 2 (master is implicit 0/1)
+            stem_name=stem["name"],
+            filename=stem["filename"],
+            relative_path=stem["relative_path"],
+            duration_sec=stem["duration_sec"],
+            bpm=bpm,
+        )
+        tracks_el.append(track)
+
+    # Transport
+    transport = ET.SubElement(live_set, "Transport")
+    ET.SubElement(transport, "PhaseNudgeTempo", Value=str(bpm))
+    ET.SubElement(transport, "LoopOn", Value="false")
+    ET.SubElement(transport, "LoopStart", Value="0")
+    ET.SubElement(transport, "LoopLength", Value="16")
+    ET.SubElement(transport, "CurrentTime", Value="0")
+    ET.SubElement(transport, "PunchIn", Value="false")
+    ET.SubElement(transport, "PunchOut", Value="false")
+    ET.SubElement(transport, "MetronomeOn", Value="false")
+    ET.SubElement(transport, "DrawMode", Value="false")
+
+    # ViewStates
+    view_states = ET.SubElement(live_set, "ViewStates")
+    ET.SubElement(view_states, "SessionIO", Value="1")
+    ET.SubElement(view_states, "SessionSends", Value="1")
+    ET.SubElement(view_states, "SessionReturns", Value="1")
+    ET.SubElement(view_states, "SessionMixer", Value="1")
+    ET.SubElement(view_states, "ArrangerIO", Value="1")
+    ET.SubElement(view_states, "ArrangerReturns", Value="1")
+
+    # InKey
+    in_key = ET.SubElement(live_set, "InKey", Value="false")
+
+    # ScaleInformation
+    scale_info = ET.SubElement(live_set, "ScaleInformation")
+    ET.SubElement(scale_info, "RootNote", Value="0")
+    ET.SubElement(scale_info, "Name", Value="Major")
+
+    return root
+
+
+def write_als(xml_root, output_path):
+    """Write the .als file (gzip-compressed XML)."""
+    # Convert to string with XML declaration
+    xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml_str += ET.tostring(xml_root, encoding="unicode")
+
+    # Gzip compress
+    with gzip.open(output_path, "wb") as f:
+        f.write(xml_str.encode("utf-8"))
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Scaffold an Ableton Live project from audio stems"
+    )
+    parser.add_argument("stems_dir", help="Directory containing stem files")
+    parser.add_argument("--name", default=None, help="Project name (default: derived from folder)")
+    parser.add_argument("--bpm", type=float, default=None, help="BPM (default: auto-detect)")
+    parser.add_argument("--output-dir", default=None, help="Output directory")
+    parser.add_argument("--no-open", action="store_true", help="Don't auto-open in Ableton")
+    args = parser.parse_args()
+
+    stems_dir = os.path.abspath(args.stems_dir)
+    if not os.path.isdir(stems_dir):
+        print(f"Error: {stems_dir} is not a directory", file=sys.stderr)
+        sys.exit(1)
+
+    # Find stems
+    stems = find_stems(stems_dir)
+    if not stems:
+        print(f"Error: No stems found in {stems_dir}", file=sys.stderr)
+        print("Expected files named: vocals.mp3, drums.mp3, bass.mp3, other.mp3 (or .wav/.flac)", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Found {len(stems)} stems: {', '.join(stems.keys())}")
+
+    # Project name
+    project_name = args.name or os.path.basename(stems_dir)
+    safe_name = project_name.replace("/", "-").replace("\\", "-")
+
+    # Output directory
+    if args.output_dir:
+        output_dir = os.path.abspath(args.output_dir)
+    else:
+        output_dir = os.path.expanduser(f"~/Documents/das/remix-projects/{safe_name}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    samples_dir = os.path.join(output_dir, "Samples", "Imported")
+    os.makedirs(samples_dir, exist_ok=True)
+
+    # Copy stems to project
+    print(f"Copying stems to {samples_dir}/")
+    for stem_name, stem_path in stems.items():
+        dest = os.path.join(samples_dir, os.path.basename(stem_path))
+        if os.path.abspath(stem_path) != os.path.abspath(dest):
+            shutil.copy2(stem_path, dest)
+
+    # Detect BPM
+    if args.bpm:
+        bpm = args.bpm
+        print(f"Using provided BPM: {bpm}")
+    else:
+        # Use the first available stem for BPM detection
+        first_stem = list(stems.values())[0]
+        print(f"Detecting BPM from {os.path.basename(first_stem)}...")
+        bpm = detect_bpm(first_stem)
+        print(f"Detected BPM: {bpm}")
+
+    # Build stems info
+    stems_info = []
+    for stem_name in STEM_ORDER:
+        if stem_name not in stems:
+            continue
+        stem_path = stems[stem_name]
+        filename = os.path.basename(stem_path)
+        relative_path = f"Samples/Imported/{filename}"
+        duration_sec = get_audio_duration(stem_path)
+        stems_info.append({
+            "name": stem_name,
+            "filename": filename,
+            "relative_path": relative_path,
+            "duration_sec": duration_sec,
+        })
+        print(f"  {stem_name}: {filename} ({duration_sec:.1f}s)")
+
+    # Build and write .als
+    als_path = os.path.join(output_dir, f"{safe_name}.als")
+    print(f"\nCreating Ableton project: {als_path}")
+    xml_root = build_als_xml(project_name, stems_info, bpm)
+    write_als(xml_root, als_path)
+
+    # Verify
+    try:
+        with gzip.open(als_path, "rb") as f:
+            content = f.read()
+            ET.fromstring(content)
+        print("✓ Valid gzipped XML")
+    except Exception as e:
+        print(f"⚠ Verification warning: {e}", file=sys.stderr)
+
+    print(f"\n✅ Project created: {output_dir}/")
+    print(f"   .als file: {als_path}")
+    print(f"   Stems: {samples_dir}/")
+    print(f"   BPM: {bpm}")
+    print(f"   Tracks: {len(stems_info)}")
+
+    # Auto-open in Ableton
+    if not args.no_open:
+        import platform
+        if platform.system() == "Darwin":
+            print(f"\nOpening in Ableton Live...")
+            os.system(f'open "{als_path}"')
+        else:
+            print(f"\nTo open: open the .als file in Ableton Live")
+
+    return als_path
+
+
+if __name__ == "__main__":
+    main()
