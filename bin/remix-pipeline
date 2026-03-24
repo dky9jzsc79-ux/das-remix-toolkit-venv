@@ -6,7 +6,7 @@
 # scaffolds Ableton project, and generates analysis visualizations.
 #
 # Usage:
-#   remix-pipeline <search-query> [--name "Song Remix"] [--no-open] [--skip-viz]
+#   remix-pipeline <search-query> [--name "Song Remix"] [--no-open] [--viz]
 #
 # Prerequisites:
 #   - tidal-dl-ng (pip install tidal-dl-ng)
@@ -32,7 +32,7 @@ NC='\033[0m'
 QUERY=""
 NAME=""
 NO_OPEN=""
-SKIP_VIZ=""
+DO_VIZ=""
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -45,12 +45,12 @@ while [[ $# -gt 0 ]]; do
             NO_OPEN="--no-open"
             shift
             ;;
-        --skip-viz)
-            SKIP_VIZ="1"
+        --viz)
+            DO_VIZ="1"
             shift
             ;;
         --help|-h)
-            echo "Usage: remix-pipeline <search-query> [--name \"Song Remix\"] [--no-open] [--skip-viz]"
+            echo "Usage: remix-pipeline <search-query> [--name \"Song Remix\"] [--no-open] [--viz]"
             echo ""
             echo "Full DAS remix pipeline:"
             echo "  1. Search Tidal for the track"
@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --name NAME    Project name (default: track name)"
             echo "  --no-open      Don't auto-open Ableton project"
-            echo "  --skip-viz     Skip songsee visualization step"
+            echo "  --viz          Generate songsee visualizations (off by default)"
             exit 0
             ;;
         *)
@@ -185,7 +185,7 @@ echo ""
 
 # ─── Step 6: Visualizations ──────────────────────────────────────────
 VIZ_FILE=""
-if [[ -z "$SKIP_VIZ" ]]; then
+if [[ -n "$DO_VIZ" ]]; then
     echo -e "${BOLD}${BLUE}[6/6]${NC} ${BOLD}Generating visualizations...${NC}"
 
     if command -v songsee &>/dev/null; then
@@ -201,7 +201,7 @@ if [[ -z "$SKIP_VIZ" ]]; then
         echo -e "${YELLOW}  ⚠ songsee not installed, skipping visualizations${NC}"
     fi
 else
-    echo -e "${BOLD}${BLUE}[6/6]${NC} ${BOLD}Skipping visualizations (--skip-viz)${NC}"
+    echo -e "${BOLD}${BLUE}[6/6]${NC} ${BOLD}Skipping visualizations (use --viz to enable)${NC}"
 fi
 
 echo ""

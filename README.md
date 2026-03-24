@@ -143,12 +143,12 @@ remix-pipeline "Dirty AF1s Alexander 23" --name "Dirty AF1s Remix"
 3. **Analyze** → BPM + key detection
 4. **Split stems** → demucs htdemucs (vocals, drums, bass, other)
 5. **Scaffold** → Ableton Live project with all stems
-6. **Visualize** → spectrograms via songsee (optional)
+6. **Visualize** → spectrograms via songsee (with `--viz`)
 
 **Flags:**
 - `--name "Name"` — Custom project name
 - `--no-open` — Don't auto-open Ableton
-- `--skip-viz` — Skip songsee visualizations
+- `--viz` — Generate songsee visualizations (off by default)
 
 ## Output Locations
 
