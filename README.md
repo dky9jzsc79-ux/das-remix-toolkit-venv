@@ -2,7 +2,8 @@
 
 A complete remix pipeline for searching, downloading, analyzing, stem-splitting, and scaffolding Ableton Live projects — all from the command line.
 
-Built for the DAS collective by Jake's AI (Clawdbot) and George's AI.
+Originally built for the DAS collective by Jake's AI (Clawdbot) and George's AI.
+Forked and maintained by Mason Smith.
 
 ## Quick Start
 
@@ -10,7 +11,9 @@ Built for the DAS collective by Jake's AI (Clawdbot) and George's AI.
 # Clone and setup
 git clone <repo-url> ~/projects/das-remix-toolkit
 cd ~/projects/das-remix-toolkit
-./setup.sh
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
 # Run the full pipeline
 remix-pipeline "Dirty AF1s Alexander 23" --name "Dirty AF1s Remix"
@@ -20,10 +23,10 @@ remix-pipeline "Dirty AF1s Alexander 23" --name "Dirty AF1s Remix"
 
 | Tool | Install | Required? |
 |------|---------|-----------|
-| Python 3.10+ | `brew install python` | ✅ Yes |
+| Python 3.12 | `brew install python@3.12` | ✅ Yes |
 | librosa | `pip install librosa` | ✅ Yes |
 | tidalapi | `pip install tidalapi` | ✅ Yes |
-| tidal-dl-ng | `pip install tidal-dl-ng` | ✅ For downloads |
+| tidal-dl | `pip install tidal-dl` | ✅ For downloads |
 | demucs | `pip install demucs` | ✅ For stem splitting |
 | songsee | `pip install songsee` | ⬜ Optional (visualizations) |
 
@@ -34,16 +37,23 @@ remix-pipeline "Dirty AF1s Alexander 23" --name "Dirty AF1s Remix"
 git clone <repo-url> ~/projects/das-remix-toolkit
 cd ~/projects/das-remix-toolkit
 
-# 2. Install Python dependencies
+# 2. Create and activate the virtual environment
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 3. Install Python dependencies
 pip install -r requirements.txt
 
-# 3. Run setup (installs deps, adds to PATH, checks tools)
-chmod +x setup.sh
-./setup.sh
-
 # 4. Authenticate with Tidal (if not already done)
-tidal-dl-ng
+tidal-dl
 # Follow OAuth flow — token saved to ~/.config/tidal_dl_ng/token.json
+```
+
+All bin scripts are symlinked into `.venv/bin/`, so commands like `track-info`, `remix-pipeline`, etc. are available whenever the venv is active.
+
+To reactivate in a new terminal:
+```bash
+source ~/projects/das-remix-toolkit/.venv/bin/activate
 ```
 
 ## Tools
@@ -66,7 +76,7 @@ track-info song.mp3 --json
 
 ### `tidal-search` — Search Tidal
 
-Search Tidal for tracks and get URLs (for use with tidal-dl-ng).
+Search Tidal for tracks and get URLs (for use with tidal-dl).
 
 ```bash
 # Search and show top 3 results
@@ -82,7 +92,7 @@ tidal-search --first "Dirty AF1s Alexander 23"
 tidal-search --limit 10 "some query"
 ```
 
-**Note:** Requires Tidal authentication via tidal-dl-ng. Token is read from `~/.config/tidal_dl_ng/token.json`.
+**Note:** Requires Tidal authentication via tidal-dl. Token is read from `~/.config/tidal_dl_ng/token.json`.
 
 ### `scaffold-remix` — Ableton Project Scaffolder
 
@@ -129,7 +139,7 @@ remix-pipeline "Dirty AF1s Alexander 23" --name "Dirty AF1s Remix"
 
 **Pipeline steps:**
 1. **Search Tidal** → find track URL
-2. **Download** → HQ audio via tidal-dl-ng
+2. **Download** → HQ audio via tidal-dl
 3. **Analyze** → BPM + key detection
 4. **Split stems** → demucs htdemucs (vocals, drums, bass, other)
 5. **Scaffold** → Ableton Live project with all stems
@@ -155,7 +165,8 @@ remix-pipeline "Dirty AF1s Alexander 23" --name "Dirty AF1s Remix"
 das-remix-toolkit/
 ├── README.md               # This file
 ├── requirements.txt        # Python dependencies
-├── setup.sh                # One-shot setup script
+├── .gitignore              # Excludes .venv/, __pycache__/, etc.
+├── setup.sh                # (deprecated — use venv workflow)
 ├── bin/
 │   ├── track-info          # BPM + key detection
 │   ├── scaffold-remix      # Ableton project scaffolder
@@ -166,7 +177,7 @@ das-remix-toolkit/
 
 ## Troubleshooting
 
-**"Token file not found"** — Run `tidal-dl-ng` once to authenticate with Tidal.
+**"Token file not found"** — Run `tidal-dl` once to authenticate with Tidal.
 
 **"No stems found"** — `scaffold-remix` expects files named `vocals.mp3`, `drums.mp3`, `bass.mp3`, `other.mp3` (the default demucs output names).
 
@@ -176,4 +187,5 @@ das-remix-toolkit/
 
 ## License
 
+Originally created by Jake Shore. Forked with modifications.
 Internal DAS collective tool. Share freely within the crew.
