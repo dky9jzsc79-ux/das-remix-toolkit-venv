@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 #
+# DEPRECATED: Use the venv instead — source .venv/bin/activate
+# This script is kept for reference only.
+#
 # setup.sh — One-shot setup for DAS Remix Toolkit
 #
 # Run this once to install dependencies and add tools to PATH.
